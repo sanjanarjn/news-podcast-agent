@@ -1,0 +1,1 @@
+from .fetch_news import get_news

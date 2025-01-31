@@ -1,0 +1,4 @@
+data/
+podcast-venv/
+.env
+*.pyc
