@@ -8,10 +8,12 @@ from langchain.sql_database import SQLDatabase
 from langchain_community.agent_toolkits import SQLDatabaseToolkit
 
 from langchain_openai import ChatOpenAI
-
+import speech_recognition as sr
+import openai
 from langchain_core.prompts import ChatPromptTemplate
 from pydantic import BaseModel, Field, ValidationError
 from typing import Annotated
+from typing import Union
 from langchain_core.messages import AnyMessage
 from langgraph.graph.message import add_messages
 from langchain_core.tools import tool  # Ensure this import is present
@@ -38,6 +40,7 @@ from src.database.vector_store import store_news, search_news_by_tags_and_catego
 import streamlit as st
 
 from enum import Enum  # Ensure to import Enum
+from datetime import datetime
 
 load_dotenv(override=True)
 openai_api_key = os.environ['OPENAI_API_KEY']
@@ -55,12 +58,14 @@ class GraphState(Enum):
 class QueryState(TypedDict):
     user_query: str
     messages: Annotated[list[AnyMessage], add_messages]
+    categories: list[str]
     tags: list[str]
-    category: str
+    date: list[str]
+    language: str
+    country: str
     news_articles: list[dict]
     context: list[dict]
     graph_state: GraphState
-
 
 
 USER_QUERY_ANALYZER_NODE = "user_query_analyzer"
@@ -73,15 +78,30 @@ FETCH_CONTEXT_FROM_VECTOR_DB = "fetch_context_from_vector_db"
 
 
 class QueryTags(BaseModel):
-    tags: list[str] = Field(description="The key topics which is of interest from the input")
-    category: str = Field(description="""Categorise the query into: 
-                          business, entertainment, general, health, science, sports, technology""")
+    categories: list[str] = Field(description='''
+                                    List of categories defined based on the input. Should be from the below list. \
+                                        •	business
+                                        •	entertainment
+                                        •	general
+                                        •	health
+                                        •	science
+                                        •	sports
+                                        •	technology
+                                   ''')
+    tags: list[str] = Field(description='''
+                            Identify any specific tags or topics which seems to be of interest to the user.
+                            ''')
+    date: list[str] = Field(description="Date or dates inputted by the user. If no date is present use todays date\
+                            Convert date format to YYYY-MM-DD, store in list even if there is one, and sort older to sooner.\
+                            If date is not explicitly defined default to blank space")
+    language: str = Field(description="Language found from user input. Use language code if found, and default to blank space if not found")
+    country: str = Field(description="Country found from user input. Use country code if found, and default to blank space if not found")
 
 from langchain.utils.openai_functions import convert_pydantic_to_openai_function
 tagging_functions =[convert_pydantic_to_openai_function(QueryTags)]
 
 user_query_analysis_prompt = ChatPromptTemplate.from_messages([
-    ("system", "Analyse the input carefully and see the topics and categories which the user is interested in. DO NOT GUESS"),
+    ("system", '''Analyse the input carefully and see the categories, topics, date and language which the user is interested in. DO NOT GUESS'''),
     ("human", "{input}")
 ])
 
@@ -97,8 +117,11 @@ def get_final_answer_prompt(context, user_query):
                                  "DO NOT GUESS or ADD any points on your own.")
 
 def extract_tags_and_category(tool_message):
+    categories = []
     tags = []
-    category = ""
+    date = []
+    language = ""
+    country = ""
     
     if 'function_call' in tool_message:
         function_call = tool_message['function_call']
@@ -106,54 +129,63 @@ def extract_tags_and_category(tool_message):
             import json
             try:
                 parsed_arguments = json.loads(function_call['arguments'])
+                categories = parsed_arguments.get("categories", [])
                 tags = parsed_arguments.get("tags", [])
-                category = parsed_arguments.get("category", "")
+                date = parsed_arguments.get("date", [])
+                language = parsed_arguments.get("language", "")
+                country = parsed_arguments.get("country", "")
+                print("Categories:", categories)
                 print("Tags:", tags)
-                print("Category:", category)
+                print("date:", date)
+                print("Language:", language)
+                print("Country:", country)
             except json.JSONDecodeError:
                 print("Failed to parse arguments")
-    
-    return tags, category
+
+    return categories, tags, date, language, country
 
 def user_query_analyzer(state: QueryState):
+    todaysDate = datetime.today().strftime("%Y-%m-%d")
     print(f"🟡 In user query analyzer... ")
     chain = user_query_analysis_prompt | llm_with_functions
-    topics_identified = chain.invoke(state["user_query"])
-    tags = []
-    category = ""
+    topics_identified = chain.invoke({"input": state["user_query"], "today": todaysDate})
+    print(f"🔔🔔🔔🔔 {topics_identified}")
+    categories = []
+    date = []
+    language = ""
+    country = ""
     if hasattr(topics_identified, "additional_kwargs"):
-        tags, category = extract_tags_and_category(topics_identified.additional_kwargs)
-
-    return {"messages": [topics_identified], "tags": tags, "category": category, "graph_state": GraphState.USER_QUERY_ANALYSIS_COMPLETE}
+        categories, tags, date, language, country = extract_tags_and_category(topics_identified.additional_kwargs)
+        
+    return {"messages": [topics_identified], "categories": categories, "tags": tags, "date": date, "language":language, "country":country, "graph_state": GraphState.USER_QUERY_ANALYSIS_COMPLETE}
 
 def fetch_existing_docs_from_vectordb(state: QueryState):
     print("🟡 Checking if docs are in Chroma...")
     existing_docs = []
-    if(state["tags"] or state["category"]):
-        existing_docs = search_news_by_tags_and_category(tags=state["tags"], category=state["category"])
-        
+    if(state["categories"] or state["tags"]):
+        existing_docs = search_news_by_tags_and_category(categories=state["categories"], tags=state["tags"])
     if existing_docs:
-        return {"messages": state["messages"], "tags": state["tags"], "context": existing_docs, "graph_state": GraphState.EXISTING_DOCS_FOUND}
+        return {"messages": state["messages"], "categories": state["categories"], "tags":state["tags"], "date": state["date"], "language":state["language"], "country":state["country"], "news_articles": existing_docs, "graph_state": GraphState.EXISTING_DOCS_FOUND}
     else:
-        return {"messages": state["messages"], "tags": state["tags"], "context": existing_docs, "graph_state": GraphState.API_FETCH_IN_PROGRESS}
+        return {"messages": state["messages"], "categories": state["categories"], "tags":state["tags"], "date": state["date"], "language":state["language"], "country":state["country"], "news_articles": existing_docs, "graph_state": GraphState.API_FETCH_IN_PROGRESS}
 
     
 def execute_news_fetch(state: QueryState):
     print(f"🟡 Fetching news via API")
-    news_articles = get_news(keywords=state["tags"], category=state["category"])
+    news_articles = get_news(state["categories"], state["date"], state["language"], state["country"])
     print(news_articles)
-    return {"messages": state["messages"], "tags": state["tags"], "news_articles": news_articles, "graph_state": GraphState.STORE_IN_PROGRESS}
+    return {"messages": state["messages"],  "categories": state["categories"], "tags":state["tags"], "date": state["date"], "language":state["language"], "country":state["country"], "news_articles": news_articles, "graph_state": GraphState.STORE_IN_PROGRESS}
     
 def store_in_vector_db(state: QueryState):
     print("🟡 Storing the fetched articles in vector db")
     if(state["news_articles"]):
-        store_news(state["news_articles"], state["category"], state["tags"])
+        store_news(state["news_articles"], state["categories"], state["tags"])
     state["graph_state"] = GraphState.FETCH_CONTEXT_IN_PROGRESS
     return state
 
 def fetch_context_from_vector_db(state: QueryState):
     print("🟡 Fetching the most relevant chunks from vector db")
-    context = search_news(state["user_query"], state["tags"], state["category"], top_k=10)
+    context = search_news(state["user_query"], state["tags"], state["categories"], top_k=10)
     state["context"] = context
     state["news_articles"] = context
     state["graph_state"] = GraphState.SUMMARISATION_IN_PROGESS
@@ -174,7 +206,6 @@ def unable_to_answer(state: QueryState):
 
 def fetch_existing_docs_condition(state: QueryState):
     print("News category based router")
-
     if isinstance(state, list):
         print("state is a list")
         ai_message = state[-1]
@@ -188,7 +219,7 @@ def fetch_existing_docs_condition(state: QueryState):
         print("state is none")
         return UNABLE_TO_ANSWER_NODE
     
-    if not state["tags"] or not state["category"]:
+    if not state["categories"] or not state["date"]:
         return UNABLE_TO_ANSWER_NODE
     else:
         return FETCH_EXISTING_DOCS
@@ -196,8 +227,8 @@ def fetch_existing_docs_condition(state: QueryState):
 
 def fetch_news_from_api_condition(state: QueryState):
     
-    if state["context"]:
-        return SUBMIT_FINAL_ANSWER
+    if state["news_articles"]:
+        return FETCH_CONTEXT_FROM_VECTOR_DB
     else:
         return EXECUTE_NEWS_FETCH
     
@@ -225,7 +256,6 @@ def compileGraph(graphState):
 
     memory = MemorySaver()
     react_graph = builder.compile(checkpointer=memory)
-
     return react_graph
 
 
@@ -241,10 +271,46 @@ def displayGraph(react_graph):
     img = Image.open(image_path)
     img.show()
 
+def record_and_transcribe(recognizer):
+    recognizer.dynamic_energy_threshold = True
+    recognizer.energy_threshold = 250
+    recognizer.pause_threshold = 2
+    recognizer.dynamic_energy_adjustment_damping = 0.1
+    with sr.Microphone() as source:
+        print("Adjusting for ambient noise...")
+        recognizer.adjust_for_ambient_noise(source, duration=1)
+        print("Listening for your input (say Quit to exit the program)...")
+        try:
+            audio = recognizer.listen(source, timeout=5, phrase_time_limit=10)
+            with open(".\\audio.wav", "wb") as f:
+                f.write(audio.get_wav_data())
+            with open(".\\audio.wav", "rb") as audio_file:
+                transcript = openai.audio.transcriptions.create(
+                model="whisper-1",
+                file=audio_file
+            )
+            return transcript.text
+        except sr.WaitTimeoutError:
+            print("No speech detected. Try again.")
+        except sr.UnknownValueError:
+            print("Sorry, I couldn't understand the audio.")
+        except Exception as e:
+            print(f"Error: {e}") 
 
-def run_streamlit_ui():
+def run_streamlit_ui(recognizer):
     st.title("Daily News Podcast Agent!")  # Set the title of the app
-
+    st.markdown(
+        """
+        <style>
+            /* Target all Streamlit buttons */
+            div.stButton > button {
+                font-size: 8px !important;  /* Adjust font size */
+                padding: 4px 10px !important;  /* Adjust padding */
+            }
+        </style>
+        """,
+        unsafe_allow_html=True
+    )
     if 'chat_history' not in st.session_state:
         st.session_state.chat_history = [
             AIMessage(content="Hello, What are you interested in hearing about today?"),
@@ -259,7 +325,15 @@ def run_streamlit_ui():
             with st.chat_message("Human"):
                 st.write(message.content)
 
-    user_query = st.chat_input("Enter your daily news query here...")  # Input for user query
+    col1, col2 = st.columns([4, 1])
+    with col1:
+    # Typing input box
+        user_query = st.text_input("Enter your daily news query here...")  # Input for user query
+    with col2:
+    # Button placed to the right of the text input box
+        if st.button("🎤 Speak Instead"):
+            recognizer = sr.Recognizer()
+            user_query = record_and_transcribe(recognizer)
 
     thread = {"configurable": {"thread_id": "1"}}
     initial_input = {"user_query": user_query, "messages": st.session_state.chat_history, "tags": [], "news_articles": [], "category":"", "graph_state": GraphState.USER_QUERY_ANALYSIS_STARTED}
@@ -297,6 +371,7 @@ st.markdown("""
 
 
 if __name__ == "__main__":
-    run_streamlit_ui()
+    recognizer = sr.Recognizer()
+    run_streamlit_ui(recognizer)
     pass
 

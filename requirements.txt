@@ -7,3 +7,5 @@ langgraph
 Pillow
 pandas
 streamlit
+SpeechRecognition
+PyAudio

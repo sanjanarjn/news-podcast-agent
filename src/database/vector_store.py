@@ -16,24 +16,23 @@ chroma_client = chromadb.PersistentClient(path="data/chroma_db")  # Folder where
 collection = chroma_client.get_or_create_collection(name="news_collection")
 
 
-def store_news(articles, category, tags):
+def store_news(articles, categories, tags):
     print("\n\n📝📝📝📝📝📝")
     docs = []
     ids = []
     metadata = []
 
-    today = get_today_date()
     for article in articles:
-        docs.append(f"{article['title']}. {article['description'] or ''}. {article['content'] or ''}")
-        ids.append(article["url"])
+        docs.append(f"{article['Title']}. {article['Content'] or ''}.")
+        ids.append(article["URL"])
         metadata.append({
-                    "url": article["url"], 
-                    "source": article["source"]["name"], 
-                    "category": category, 
+                    "url": article["URL"], 
+                    "source": article["ApiSource"], 
+                    **{f"{cat}_category": True for cat in categories}, 
                     **{tag: True for tag in tags},
-                    "date": today})
+                    "date": article['PublishedAt'],
+                    "sourcedOn": get_today_date()})
     
-
     # Generate embeddings using the updated OpenAI API
     response = openai.embeddings.create(
         model="text-embedding-ada-002",
@@ -53,16 +52,16 @@ def get_today_date():
     today = datetime.now().strftime("%Y-%m-%d")
     return today
 
-def search_news_by_tags_and_category(tags, category, top_k=3):
+def search_news_by_tags_and_category(categories, tags, top_k=3):
     where_clause = {
         "$and": [
             {
-                "$or": [
-                    {"category": category},
+                "$and": [
+                    {f"{categories[0]}_category": True} if len(categories) == 1 else {"$or": [{f"{cat}_category": True} for cat in categories]},  # Handle single category case
                     {tags[0]: True} if len(tags) == 1 else {"$or": [{tag: True} for tag in tags]}
                 ]
             },
-            {"date": get_today_date()}  # Added date condition
+            {"sourcedOn": get_today_date()}  # Added date condition
         ]
     }
     print(f"Search query: {where_clause}")
@@ -76,18 +75,18 @@ def search_news_by_tags_and_category(tags, category, top_k=3):
     print(f"Articles found in vector store: {len(news_articles)}")
     return news_articles
 
-def search_news(query, tags, category, top_k=3):
+def search_news(query, tags, categories, top_k=7):
     print("In search vector store: 🔍🔍🔍🔍🔍🔍")
 
     where_clause = {
         "$and": [
             {
-                "$or": [
-                    {"category": category},
+                "$and": [
+                    {f"{categories[0]}_category": True} if len(categories) == 1 else {"$or": [{f"{cat}_category": True} for cat in categories]},  # Handle single category case
                     {tags[0]: True} if len(tags) == 1 else {"$or": [{tag: True} for tag in tags]}
                 ]
             },
-            {"date": get_today_date()}  # Added date condition
+            {"sourcedOn": get_today_date()}  # Added date condition
         ]
     }
     print(f"Search query: {where_clause}")
