@@ -58,6 +58,7 @@ class GraphState(Enum):
 class QueryState(TypedDict):
     user_query: str
     messages: Annotated[list[AnyMessage], add_messages]
+    categories_and_keywords: list[Union[str, dict]]
     categories: list[str]
     tags: list[str]
     date: list[str]
@@ -78,19 +79,8 @@ FETCH_CONTEXT_FROM_VECTOR_DB = "fetch_context_from_vector_db"
 
 
 class QueryTags(BaseModel):
-    categories: list[str] = Field(description='''
-                                    List of categories defined based on the input. Should be from the below list. \
-                                        •	business
-                                        •	entertainment
-                                        •	general
-                                        •	health
-                                        •	science
-                                        •	sports
-                                        •	technology
-                                   ''')
-    tags: list[str] = Field(description='''
-                            Identify any specific tags or topics which seems to be of interest to the user.
-                            ''')
+    categories_and_keywords: list[Union[str, dict]] = Field(description="List of categories defined based on the input. If category was formulated using key words store as dictionay: [{{category defined:key words used}}]")
+
     date: list[str] = Field(description="Date or dates inputted by the user. If no date is present use todays date\
                             Convert date format to YYYY-MM-DD, store in list even if there is one, and sort older to sooner.\
                             If date is not explicitly defined default to blank space")
@@ -101,7 +91,24 @@ from langchain.utils.openai_functions import convert_pydantic_to_openai_function
 tagging_functions =[convert_pydantic_to_openai_function(QueryTags)]
 
 user_query_analysis_prompt = ChatPromptTemplate.from_messages([
-    ("system", '''Analyse the input carefully and see the categories, topics, date and language which the user is interested in. DO NOT GUESS'''),
+    ("system", '''You are an AI that generates respective parameters based on user input:
+            parameters are: categories(list), dates(list), laguage, and country
+            Rules:
+                1. categories optiones are these:
+                    •	business
+                    •	entertainment
+                    •	general
+                    •	health
+                    •	science
+                    •	sports
+                    •	technology
+                2. categories is stored in a list even if there is one.
+                3. If category is not explicity stated, use keywords to define a category yourself.
+                4. If you used keywords to define category store both like ["categoryDefined":"keywords used"]
+                5. Convert date format to YYYY-MM-DD, store in list even if there is one, and sort older to sooner.
+                6. If date is not explicitly defined default to {today}
+                7. use language code language default is ""
+                8. use country code for country, default is ""'''),
     ("human", "{input}")
 ])
 
@@ -116,6 +123,19 @@ def get_final_answer_prompt(context, user_query):
                                  "summarize and give a list of bulleted points to the user. "
                                  "DO NOT GUESS or ADD any points on your own.")
 
+def extract_keys_and_values(category: list[Union[str, dict]]):
+    keys_list = []
+    values_list = []
+
+    for item in category:
+        if isinstance(item, dict): 
+            keys_list.extend(item.keys()) 
+            values_list.extend(word.strip() for values in item.values() for word in values.split(","))
+        elif isinstance(item, str): 
+            keys_list.append(item)  
+
+    return keys_list, values_list
+
 def extract_tags_and_category(tool_message):
     categories = []
     tags = []
@@ -129,8 +149,8 @@ def extract_tags_and_category(tool_message):
             import json
             try:
                 parsed_arguments = json.loads(function_call['arguments'])
-                categories = parsed_arguments.get("categories", [])
-                tags = parsed_arguments.get("tags", [])
+                categories_and_keywords = parsed_arguments.get("categories_and_keywords", [])
+                categories, tags = extract_keys_and_values(categories_and_keywords)
                 date = parsed_arguments.get("date", [])
                 language = parsed_arguments.get("language", "")
                 country = parsed_arguments.get("country", "")
@@ -142,7 +162,7 @@ def extract_tags_and_category(tool_message):
             except json.JSONDecodeError:
                 print("Failed to parse arguments")
 
-    return categories, tags, date, language, country
+    return categories_and_keywords, categories, tags, date, language, country
 
 def user_query_analyzer(state: QueryState):
     todaysDate = datetime.today().strftime("%Y-%m-%d")
@@ -155,9 +175,15 @@ def user_query_analyzer(state: QueryState):
     language = ""
     country = ""
     if hasattr(topics_identified, "additional_kwargs"):
-        categories, tags, date, language, country = extract_tags_and_category(topics_identified.additional_kwargs)
+        categories_and_keywords, categories, tags, date, language, country = extract_tags_and_category(topics_identified.additional_kwargs)
         
-    return {"messages": [topics_identified], "categories": categories, "tags": tags, "date": date, "language":language, "country":country, "graph_state": GraphState.USER_QUERY_ANALYSIS_COMPLETE}
+    return {"messages": [topics_identified], 
+            "categories_and_keywords": categories_and_keywords,
+            "categories": categories, 
+            "tags": tags, 
+            "date": date, "language":language, 
+            "country":country, "graph_state": 
+            GraphState.USER_QUERY_ANALYSIS_COMPLETE}
 
 def fetch_existing_docs_from_vectordb(state: QueryState):
     print("🟡 Checking if docs are in Chroma...")
@@ -172,7 +198,7 @@ def fetch_existing_docs_from_vectordb(state: QueryState):
     
 def execute_news_fetch(state: QueryState):
     print(f"🟡 Fetching news via API")
-    news_articles = get_news(state["categories"], state["date"], state["language"], state["country"])
+    news_articles = get_news(state["categories_and_keywords"], state["date"], state["language"], state["country"])
     print(news_articles)
     return {"messages": state["messages"],  "categories": state["categories"], "tags":state["tags"], "date": state["date"], "language":state["language"], "country":state["country"], "news_articles": news_articles, "graph_state": GraphState.STORE_IN_PROGRESS}
     

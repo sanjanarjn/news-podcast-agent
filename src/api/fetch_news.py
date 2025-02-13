@@ -47,24 +47,22 @@ def call_newsApi(news, category, date, language, country):
         '''  
     else:
         url = news["storiesUrl"]
-
-    # Handle Categories and Keywords
+    #Categories/Key Words
     if "top-headlines" in url:
         if isinstance(category, dict):
-            category_key = list(category.keys())[0]  # Get the first category key
-            params[news["categoryParam"]] = category_key  # Assign category
-            params["q"] = ' OR '.join(f'"{word.strip()}"' for word in category[category_key])  # Join keywords with OR
+            params[news["categoryParam"]] = list(category.items())[0][0]
+            params["q"] = ' OR '.join(f'{word.strip()}' for word in list(category.items())[0][1].split(","))
         else:
             params[news["categoryParam"]] = category
     else:
         if isinstance(category, dict):
-            category_key = list(category.keys())[0]
-            query = f'"{category_key}" OR ' if category_key != "general" else ""
-            query += ' OR '.join(f'"{word.strip()}"' for word in category[category_key])
+            query = ""
+            if list(category.items())[0][0] != "general":
+                query = f'"{list(category.items())[0][0]}" OR '
+            query += ' OR '.join(f'"{word.strip()}"' for word in list(category.items())[0][1].split(","))
             params["q"] = query
         else:
             params["q"] = category
-
     #dates
     params[news["fromDateParam"]] = date[0]
     if len(date) > 1:
@@ -74,15 +72,12 @@ def call_newsApi(news, category, date, language, country):
     if country != "":
         params[news["countryParam"]] = country
     
-    print(url)
-    print(params)
+    print(f"\nFetching news via {url} with params: {params}")
     response = requests.get(url, params=params)
-    print(f"Response from {url} with params: {params} : {response.content}")
     return response.json().get("articles", [])
 
 def make_request(news, category, date, language, country):
     articlesList = call_newsApi(news, category, date, language, country)
-    print(f"📝📝📝📝📝📝 {len(articlesList)}")
     if news["name"] == "NewsApi":
         return [{"Author": article['author'], "Title": article['title'], "PublishedAt": article['publishedAt'], "Content": article['content'], "Category": category, "ApiSource": news['name'], "URL": article["url"]} for article in articlesList]
     elif news["name"] == "GNews":
