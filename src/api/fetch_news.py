@@ -34,6 +34,8 @@ NEWS_APIS = [
 ]
 
 def call_newsApi(news, category, date, language, country):
+    print("\n\n\n***Ctageory sent:***")
+    print(category)
     params = {news["apiKeyParam"]:news["apiKey"]}
     #URL
     if date[0] == datetime.today().strftime("%Y-%m-%d"):
@@ -47,22 +49,24 @@ def call_newsApi(news, category, date, language, country):
         '''  
     else:
         url = news["storiesUrl"]
-    #Categories/Key Words
+
+    # Handle Categories and Keywords
     if "top-headlines" in url:
         if isinstance(category, dict):
-            params[news["categoryParam"]] = list(category.items())[0][0]
-            params["q"] = ' OR '.join(f'{word.strip()}' for word in list(category.items())[0][1].split(","))
+            category_key = list(category.keys())[0]  # Get the first category key
+            params[news["categoryParam"]] = category_key  # Assign category
+            params["q"] = ' OR '.join(f'"{word.strip()}"' for word in category[category_key].split(","))  # Join keywords with OR
         else:
             params[news["categoryParam"]] = category
     else:
         if isinstance(category, dict):
-            query = ""
-            if list(category.items())[0][0] != "general":
-                query = f'"{list(category.items())[0][0]}" OR '
-            query += ' OR '.join(f'"{word.strip()}"' for word in list(category.items())[0][1].split(","))
+            category_key = list(category.keys())[0]
+            query = f'"{category_key}" OR ' if category_key != "general" else ""
+            query += ' OR '.join(f'"{word.strip()}"' for word in category[category_key].split(","))
             params["q"] = query
         else:
             params["q"] = category
+
     #dates
     params[news["fromDateParam"]] = date[0]
     if len(date) > 1:
@@ -72,8 +76,10 @@ def call_newsApi(news, category, date, language, country):
     if country != "":
         params[news["countryParam"]] = country
     
-    print(f"\nFetching news via {url} with params: {params}")
+    print(url)
+    print(params)
     response = requests.get(url, params=params)
+    print(f"Response from {url} with params: {params} : {response.content}")
     return response.json().get("articles", [])
 
 def make_request(news, category, date, language, country):
