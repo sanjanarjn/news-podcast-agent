@@ -303,9 +303,9 @@ def record_and_transcribe(recognizer):
     recognizer.pause_threshold = 2
     recognizer.dynamic_energy_adjustment_damping = 0.1
     with sr.Microphone() as source:
-        print("Adjusting for ambient noise...")
-        recognizer.adjust_for_ambient_noise(source, duration=1)
-        print("Listening for your input (say Quit to exit the program)...")
+        with st.chat_message("AI"):
+            recognizer.adjust_for_ambient_noise(source, duration=1)
+            st.write("Listening... (say Quit to exit)")
         try:
             audio = recognizer.listen(source, timeout=5, phrase_time_limit=10)
             with open(".\\audio.wav", "wb") as f:
@@ -324,67 +324,73 @@ def record_and_transcribe(recognizer):
             print(f"Error: {e}") 
 
 def run_streamlit_ui(recognizer):
-    st.title("Daily News Podcast Agent!")  # Set the title of the app
-    st.markdown(
-        """
-        <style>
-            /* Target all Streamlit buttons */
-            div.stButton > button {
-                font-size: 8px !important;  /* Adjust font size */
-                padding: 4px 10px !important;  /* Adjust padding */
-            }
-        </style>
-        """,
-        unsafe_allow_html=True
-    )
+    st.title("Daily News Podcast Agent!")  
+
     if 'chat_history' not in st.session_state:
         st.session_state.chat_history = [
             AIMessage(content="Hello, What are you interested in hearing about today?"),
         ]
 
-    for message in st.session_state.chat_history:
-        if isinstance(message, AIMessage):
-            with st.chat_message("AI"):
+    if "user_query" not in st.session_state:
+        st.session_state.user_query = ""
+
+    # Display chat messages
+    chat_container = st.container()  # Create a container for scrolling
+    with chat_container:
+        for message in st.session_state.chat_history:
+            role = "AI" if isinstance(message, AIMessage) else "Human"
+            with st.chat_message(role):
                 st.write(message.content)
 
-        elif isinstance(message, HumanMessage):
-            with st.chat_message("Human"):
-                st.write(message.content)
-
-    col1, col2 = st.columns([4, 1])
-    with col1:
-    # Typing input box
-        user_query = st.text_input("Enter your daily news query here...")  # Input for user query
-    with col2:
-    # Button placed to the right of the text input box
-        if st.button("🎤 Speak Instead"):
+    # User Input Form
+    with st.form("user_input_form"):
+        user_query = st.text_input("Enter your daily news query here...", key="user_input", placeholder="Type here...")
+        if st.form_submit_button("🎤 Speak Instead"):
             recognizer = sr.Recognizer()
             user_query = record_and_transcribe(recognizer)
 
     thread = {"configurable": {"thread_id": "1"}}
-    initial_input = {"user_query": user_query, "messages": st.session_state.chat_history, "tags": [], "news_articles": [], "category":"", "graph_state": GraphState.USER_QUERY_ANALYSIS_STARTED}
+    initial_input = {
+        "user_query": user_query, 
+        "messages": st.session_state.chat_history, 
+        "tags": [], "news_articles": [], 
+        "category": "", 
+        "graph_state": GraphState.USER_QUERY_ANALYSIS_STARTED
+    }
     react_graph = compileGraph(initial_input)
 
-    if user_query is not None and user_query != "":
+    if user_query is not None and user_query != "":  # Ensure query is not empty
         st.session_state.chat_history.append(HumanMessage(content=user_query))
 
         with st.chat_message("Human"):
             st.markdown(user_query)
-        
+
         ai_response = ""
         graph_state = GraphState.USER_QUERY_ANALYSIS_STARTED
         
         with st.status(graph_state.value):
             for event in react_graph.stream(initial_input, thread, stream_mode="values"):
                 graph_state = event["graph_state"]
-                ai_response = (event['messages'][-1].content)  
-                #print(ai_response)
-                print(graph_state.value)
+                ai_response = event['messages'][-1].content  
                 st.write(graph_state.value)
 
         st.session_state.chat_history.append(AIMessage(content=ai_response))
         with st.chat_message("AI"):
             st.write(ai_response)
+
+        st.session_state.user_query = ""
+        st.rerun()
+
+    st.markdown("""
+        <script>
+            setTimeout(() => {
+                var chatContainer = window.parent.document.querySelector('section.main');
+                if (chatContainer) {
+                    chatContainer.scrollTo({ top: chatContainer.scrollHeight, behavior: 'smooth' });
+                }
+            }, 200);
+        </script>
+    """, unsafe_allow_html=True)
 
 # Add CSS for blinking effect
 st.markdown("""
@@ -400,4 +406,3 @@ if __name__ == "__main__":
     recognizer = sr.Recognizer()
     run_streamlit_ui(recognizer)
     pass
-
