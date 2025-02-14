@@ -55,7 +55,12 @@ def get_today_date():
 def search_news_by_tags_and_category(categories, tags, top_k=3):
     where_clause = {
         "$and": [
-            get_tags_categories_search_clause(categories, tags),
+            {
+                "$and": [
+                    {f"{categories[0]}_category": True} if len(categories) == 1 else {"$or": [{f"{cat}_category": True} for cat in categories]},  # Handle single category case
+                    {tags[0]: True} if len(tags) == 1 else {"$or": [{tag: True} for tag in tags]}
+                ]
+            },
             {"sourcedOn": get_today_date()}  # Added date condition
         ]
     }
@@ -75,7 +80,12 @@ def search_news(query, tags, categories, top_k=7):
 
     where_clause = {
         "$and": [
-            get_tags_categories_search_clause(categories, tags),
+            {
+                "$and": [
+                    {f"{categories[0]}_category": True} if len(categories) == 1 else {"$or": [{f"{cat}_category": True} for cat in categories]},  # Handle single category case
+                    {tags[0]: True} if len(tags) == 1 else {"$or": [{tag: True} for tag in tags]}
+                ]
+            },
             {"sourcedOn": get_today_date()}  # Added date condition
         ]
     }
@@ -106,25 +116,6 @@ def search_news(query, tags, categories, top_k=7):
 
     print(f"Articles found in vector store: {len(news_articles)}")
     return news_articles
-
-def get_tags_categories_search_clause(categories, tags):
-    categories_and_tags = {  # Added return statement to return the clause
-        "$and": [
-            {f"{categories[0]}_category": True} if len(categories) == 1 else {"$or": [{f"{cat}_category": True} for cat in categories]},  # Handle single category case
-            {tags[0]: True} if len(tags) == 1 else {"$or": [{tag: True} for tag in tags]}
-        ]
-    }
-
-    only_categories = {f"{categories[0]}_category": True} if len(categories) == 1 else {"$or": [{f"{cat}_category": True} for cat in categories]}
-    only_tags = {tags[0]: True} if len(tags) == 1 else {"$or": [{tag: True} for tag in tags]}
-
-    if categories and tags:
-        return categories_and_tags
-    elif not categories:
-        return only_tags
-    elif not tags:
-        return only_categories
-
 
 if __name__ == "__main__":
     from src.api.fetch_news import get_news
