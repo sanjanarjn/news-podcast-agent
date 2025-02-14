@@ -41,6 +41,7 @@ import streamlit as st
 
 from enum import Enum  # Ensure to import Enum
 from datetime import datetime
+import uuid
 
 load_dotenv(override=True)
 openai_api_key = os.environ['OPENAI_API_KEY']
@@ -331,66 +332,70 @@ def run_streamlit_ui(recognizer):
             AIMessage(content="Hello, What are you interested in hearing about today?"),
         ]
 
-    if "user_query" not in st.session_state:
-        st.session_state.user_query = ""
+    if 'last_query' not in st.session_state:
+        st.session_state.last_query = ""  
 
-    # Display chat messages
-    chat_container = st.container()  # Create a container for scrolling
+    if 'input_key' not in st.session_state:
+        st.session_state.input_key = str(uuid.uuid4())  
+
+    st.markdown("""
+        <style>
+        .stChatInput { position: fixed; bottom: 0; width: 100%; background: black; padding: 10px; }
+        .stContainer { overflow-y: auto; height: calc(100vh - 120px); }
+        </style>
+    """, unsafe_allow_html=True)
+
+    chat_container = st.container()
     with chat_container:
         for message in st.session_state.chat_history:
             role = "AI" if isinstance(message, AIMessage) else "Human"
             with st.chat_message(role):
                 st.write(message.content)
 
-    # User Input Form
-    with st.form("user_input_form"):
-        user_query = st.text_input("Enter your daily news query here...", key="user_input", placeholder="Type here...")
-        if st.form_submit_button("🎤 Speak Instead"):
-            recognizer = sr.Recognizer()
-            user_query = record_and_transcribe(recognizer)
+    input_container = st.empty()
 
+    with input_container:
+        with st.form("user_input_form"):
+            user_query = st.text_input("Enter your daily news query here...", key=st.session_state.input_key, placeholder="Type here...")
+            if st.form_submit_button("🎤 Speak Instead") and user_query == "":
+                recognizer = sr.Recognizer()
+                user_query = record_and_transcribe(recognizer)
+    
     thread = {"configurable": {"thread_id": "1"}}
     initial_input = {
-        "user_query": user_query, 
-        "messages": st.session_state.chat_history, 
-        "tags": [], "news_articles": [], 
-        "category": "", 
-        "graph_state": GraphState.USER_QUERY_ANALYSIS_STARTED
+        "user_query": user_query,
+        "messages": st.session_state.chat_history,
+        "tags": [],
+        "news_articles": [],
+        "category": "",
+        "graph_state": GraphState.USER_QUERY_ANALYSIS_STARTED,
     }
-    react_graph = compileGraph(initial_input)
+    if user_query and user_query != st.session_state.last_query:
+        st.session_state.last_query = user_query
 
-    if user_query is not None and user_query != "":  # Ensure query is not empty
         st.session_state.chat_history.append(HumanMessage(content=user_query))
-
         with st.chat_message("Human"):
             st.markdown(user_query)
 
+        # Initialize Graph Processing
         ai_response = ""
         graph_state = GraphState.USER_QUERY_ANALYSIS_STARTED
-        
+
+        react_graph = compileGraph(initial_input)
+
         with st.status(graph_state.value):
             for event in react_graph.stream(initial_input, thread, stream_mode="values"):
                 graph_state = event["graph_state"]
-                ai_response = event['messages'][-1].content  
+                ai_response = event["messages"][-1].content
                 st.write(graph_state.value)
 
+        # Append AI Response
         st.session_state.chat_history.append(AIMessage(content=ai_response))
         with st.chat_message("AI"):
             st.write(ai_response)
 
-        st.session_state.user_query = ""
+        input_container.empty()
         st.rerun()
-
-    st.markdown("""
-        <script>
-            setTimeout(() => {
-                var chatContainer = window.parent.document.querySelector('section.main');
-                if (chatContainer) {
-                    chatContainer.scrollTo({ top: chatContainer.scrollHeight, behavior: 'smooth' });
-                }
-            }, 200);
-        </script>
-    """, unsafe_allow_html=True)
 
 # Add CSS for blinking effect
 st.markdown("""
